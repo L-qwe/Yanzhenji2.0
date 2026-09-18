@@ -65,19 +65,19 @@ ESP32 上电
 
 ## 2. 硬件接线
 
-2.0 底板的 H1/H2 接线已经按嘉立创EDA原理图固化：
+2.0 底板的 H1/H2 接线已经按嘉立创EDA原理图固化；卡座为 Micro SD：
 
 | 功能 | ESP32 GPIO | 原理图连接 |
 |---|---:|---|
 | 报警输入 | 34 | H1-5，U1 PC817 集电极，低有效 |
 | 市电正常检测 | 35 | H1-6，U2 BQ24074 `PGOOD#`，低=市电、 高=电池 |
-| SD 卡检测 | 32 | H1-7，TF1 `CD`，低=已插卡 |
-| SD CS | 27 | H1-11，经 U6 电平缓冲连接 TF1 `CD/DAT3` |
-| SD SCLK | 18 | H2-9，经 U6 连接 TF1 `CLK` |
-| SD MISO | 19 | H2-8，经 U6 连接 TF1 `DAT0` |
-| SD MOSI | 23 | H2-2，经 U6 连接 TF1 `CMD` |
+| Micro SD 卡检测 | 32 | H1-7，Micro SD `CD`，低=已插卡 |
+| Micro SD CS | 27 | H1-11，经 U6 电平缓冲连接 Micro SD `CD/DAT3` |
+| Micro SD SCLK | 18 | H2-9，经 U6 连接 Micro SD `CLK` |
+| Micro SD MISO | 19 | H2-8，经 U6 连接 Micro SD `DAT0` |
+| Micro SD MOSI | 23 | H2-2，经 U6 连接 Micro SD `CMD` |
 
-SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上报，但无法保存永久历史或
+Micro SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上报，但无法保存永久历史或
 离线补传记录；运行中插卡会自动挂载。
 
 ```
