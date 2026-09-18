@@ -1,0 +1,17 @@
+# Name,   Type, SubType,  Offset,   Size,    Flags
+# ============================================================================
+# 自定义分区表: 加 BLE 后固件突破 1.25MB, 需扩大 app 分区
+# 4MB Flash = 0x400000 (4,194,304 bytes)
+#   nvs       20 KB    0x9000  - 0xDFE0
+#   otadata    8 KB    0xE000  - 0xFFE0
+#   app0    1.5  MB    0x10000 - 0x18FFE0   (原 1.25MB → 1.5MB)
+#   app1    1.5  MB    0x190000- 0x30FFE0   (原 1.25MB → 1.5MB)
+#   spiffs  896  KB    0x310000- 0x3EFFE0   (兼容预留，v2.0 报警数据不写 Flash)
+#   coredump 64 KB    0x3F0000- 0x3FFFE0
+# ============================================================================
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x180000,
+app1,     app,  ota_1,    0x190000, 0x180000,
+spiffs,   data, spiffs,   0x310000, 0xE0000,
+coredump, data, coredump, 0x3F0000, 0x10000,
