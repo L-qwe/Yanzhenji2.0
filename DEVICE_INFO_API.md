@@ -1,6 +1,6 @@
 # 设备信息接口
 
-该接口用于读取设备 WiFi MAC、BLE 名称、当前固件版本、固件类型、WiFi SSID、STA 联网 IP、HTTP 端口和实时 WiFi 状态。HTTP、AP 和 BLE 返回相同的 UTF-8 JSON 数据。
+该接口用于读取设备 WiFi MAC、BLE 名称、固件、WiFi、当前供电来源及 SD 卡状态。HTTP、AP 和 BLE 返回相同的 UTF-8 JSON 数据。
 
 ## 返回数据
 
@@ -9,14 +9,17 @@
 ```json
 {
   "mac_address": "70:4B:CA:03:44:6C",
-  "firmware_version": "v0.2.1",
+  "firmware_version": "v2.0.0",
   "firmware_type": "验针机",
   "ble_name": "YanZhenJi_704BCA03446C",
   "wifi_ssid": "Factory-WiFi",
   "wifi_ip": "192.168.1.123",
   "wifi_port": 80,
   "wifi_connected": true,
-  "wifi_status": "connected"
+  "wifi_status": "connected",
+  "power_source": "mains",
+  "power_lost": false,
+  "sd_connected": true
 }
 ```
 
@@ -25,14 +28,17 @@
 ```json
 {
   "mac_address": "70:4B:CA:03:44:6C",
-  "firmware_version": "v0.2.1",
+  "firmware_version": "v2.0.0",
   "firmware_type": "验针机",
   "ble_name": "YanZhenJi_704BCA03446C",
   "wifi_ssid": "",
   "wifi_ip": "",
   "wifi_port": 80,
   "wifi_connected": false,
-  "wifi_status": "disconnected"
+  "wifi_status": "disconnected",
+  "power_source": "battery",
+  "power_lost": true,
+  "sd_connected": false
 }
 ```
 
@@ -47,6 +53,9 @@
 | `wifi_port` | number | 设备 HTTP 服务端口，当前为 `80` |
 | `wifi_connected` | boolean | WiFi STA 是否已连接 |
 | `wifi_status` | string | WiFi 实时状态，取值见下表 |
+| `power_source` | string | 当前供电来源：`mains`=外部电源，`battery`=电池 |
+| `power_lost` | boolean | `true`=外部电源已掉电，`false`=外部电源正常 |
+| `sd_connected` | boolean | `true`=SD 已插入且成功挂载可用；否则为 `false` |
 
 `wifi_status` 可能值：`idle`、`no_ssid_available`、`scan_completed`、`connected`、`connect_failed`、`connection_lost`、`disconnected`、`unknown`。
 
@@ -89,7 +98,7 @@ AP 与普通 HTTP 使用同一路由和相同响应。即使 STA 尚未连上外
 | 配网状态 | `8e7f1a03-2b3c-4d5e-9f01-aabbccddeeff` | Read + Notify | 现有状态接口，如 `CONNECTED,192.168.1.123` |
 | **设备信息** | **`8e7f1a04-2b3c-4d5e-9f01-aabbccddeeff`** | **Read** | 与 HTTP 完全相同的 UTF-8 JSON |
 
-每次读取设备信息特征值时，固件会实时重新获取 WiFi 状态和 IP。JSON 长度超过传统 BLE 单包的 20 字节，客户端应使用标准 GATT 长读取；Android/iOS BLE API 和 nRF Connect 均可按特征值读取，不要在应用层只保留第一个 ATT 数据片段。
+每次读取设备信息特征值时，固件会实时重新获取 WiFi、供电和 SD 状态。JSON 长度超过传统 BLE 单包的 20 字节，客户端应使用标准 GATT 长读取；Android/iOS BLE API 和 nRF Connect 均可按特征值读取，不要在应用层只保留第一个 ATT 数据片段。
 
 固件升级后，如果手机仍显示旧的 GATT 特征列表，请断开设备并刷新服务；必要时清除系统蓝牙 GATT 缓存后重连。
 
@@ -105,8 +114,9 @@ AP 与普通 HTTP 使用同一路由和相同响应。即使 STA 尚未连上外
 - 上报成功：每 60 秒刷新一次
 - 上报失败：每 15 秒重试一次
 
-请求仅包含平台要求的 7 个字段：`mac_address`、`firmware_version`、
-`firmware_type`、`wifi_ip`、`wifi_port`、`wifi_connected`、`wifi_status`。
+请求包含设备基础字段以及 `power_source`、`power_lost`、`sd_connected`：
+`mac_address`、`firmware_version`、`firmware_type`、`wifi_ip`、`wifi_port`、
+`wifi_connected`、`wifi_status`、`power_source`、`power_lost`、`sd_connected`。
 设备未连接 WiFi 时不会发送。HTTP 请求在后台任务中执行，不阻塞报警采集、BLE、
 MQTT 和设备 Web 服务。
 

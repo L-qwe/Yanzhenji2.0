@@ -6,8 +6,8 @@
  * 发布 topic (心跳+告警):  由 g_cfg_mqtt_pub_topic 配置, {MAC}替换为实际地址
  * 订阅 topic (OTA指令):    由 g_cfg_mqtt_sub_topic 配置, {MAC}替换为实际地址
  *
- * 心跳: {"<mac>_online":true}
- * 告警: {"<mac>_online":true,"<mac>_error":"<timestamp>"}
+ * 心跳: {"<mac>_online":true,"version":"v2.0.0",...,"sd_connected":true}
+ * 告警: {"<mac>_online":true,"error":"<timestamp>",...}
  * 指令: {"cmd":"ota","url":"http://..."}
  *
  * 报警期间心跳暂停, 报警清除后自动恢复
@@ -23,6 +23,7 @@
 #include "ota_handler.h"
 #include "ntp_time.h"
 #include "power_monitor.h"
+#include "sd_storage.h"
 
 // (PubSubClient mqtt 定义在 ESP32_Alarm_Monitor.ino 中, 避免初始化顺序问题)
 
@@ -215,14 +216,15 @@ bool mqtt_connect() {
       if (!boot_notified) {
         bool dhcp = (g_cfg_static_ip.length() == 0);
         const bool battery = is_battery_powered();
-        String boot_msg = "{\"" + g_device_mac + "_status\":\"online\",\"" +
-                          g_device_mac + "_version\":\"" + FIRMWARE_VERSION + "\",\"" +
-                          g_device_mac + "_ip\":\"" + WiFi.localIP().toString() + "\",\"" +
-                          g_device_mac + "_gw\":\"" + WiFi.gatewayIP().toString() + "\",\"" +
-                          g_device_mac + "_dhcp\":" + (dhcp ? "true" : "false") +
-                          ",\"mac_address\":\"" + g_device_mac +
-                          "\",\"power_source\":\"" + (battery ? "battery" : "mains") +
-                          "\",\"power_lost\":" + (battery ? "true" : "false") + "}";
+        const bool sd_connected = sd_storage_connected();
+        String boot_msg = "{\"" + g_device_mac + "_online\":true," +
+                          "\"version\":\"" + FIRMWARE_VERSION + "\"," +
+                          "\"ip\":\"" + WiFi.localIP().toString() + "\"," +
+                          "\"gw\":\"" + WiFi.gatewayIP().toString() + "\"," +
+                          "\"dhcp\":" + (dhcp ? "true" : "false") +
+                          ",\"power_source\":\"" + (battery ? "battery" : "mains") +
+                          "\",\"power_lost\":" + (battery ? "true" : "false") +
+                          ",\"sd_connected\":" + (sd_connected ? "true" : "false") + "}";
         if (mqtt.publish(g_topic_pub.c_str(), boot_msg.c_str())) {
           boot_notified = true;
           Serial.print(F("[MQTT] Boot notification: "));
@@ -290,7 +292,7 @@ void maintain_mqtt() {
 }
 
 // ============================================================================
-//  发布心跳 — 每秒 {"<mac>_online":true,"<mac>_error":"NO"}, 报警期间跳过
+//  发布心跳 — 仅 online 键带 MAC 前缀，报警期间跳过
 //  直接读 GPIO 状态, 不依赖跨模块变量, 避免符号链接问题
 // ============================================================================
 
@@ -308,14 +310,15 @@ void publish_heartbeat() {
 
     bool dhcp = (g_cfg_static_ip.length() == 0);
     const bool battery = is_battery_powered();
-    String payload = "{\"" + g_device_mac + "_online\":true,\"" +
-                     g_device_mac + "_version\":\"" + FIRMWARE_VERSION + "\",\"" +
-                     g_device_mac + "_ip\":\"" + WiFi.localIP().toString() + "\",\"" +
-                     g_device_mac + "_gw\":\"" + WiFi.gatewayIP().toString() + "\",\"" +
-                     g_device_mac + "_dhcp\":" + (dhcp ? "true" : "false") +
-                     ",\"mac_address\":\"" + g_device_mac +
-                     "\",\"power_source\":\"" + (battery ? "battery" : "mains") +
-                     "\",\"power_lost\":" + (battery ? "true" : "false") + "}";
+    const bool sd_connected = sd_storage_connected();
+    String payload = "{\"" + g_device_mac + "_online\":true," +
+                     "\"version\":\"" + FIRMWARE_VERSION + "\"," +
+                     "\"ip\":\"" + WiFi.localIP().toString() + "\"," +
+                     "\"gw\":\"" + WiFi.gatewayIP().toString() + "\"," +
+                     "\"dhcp\":" + (dhcp ? "true" : "false") +
+                     ",\"power_source\":\"" + (battery ? "battery" : "mains") +
+                     "\",\"power_lost\":" + (battery ? "true" : "false") +
+                     ",\"sd_connected\":" + (sd_connected ? "true" : "false") + "}";
 
     if (mqtt.publish(g_topic_pub.c_str(), payload.c_str())) {
       // 心跳正常, 不打印
@@ -326,7 +329,7 @@ void publish_heartbeat() {
 }
 
 // ============================================================================
-//  发布告警 — {"<mac>_online":true,"<mac>_error":"<timestamp>"}
+//  发布告警 — {"<mac>_online":true,"error":"<timestamp>",...}
 // ============================================================================
 
 bool publish_alarm(const String& timestamp, int count) {
@@ -336,13 +339,14 @@ bool publish_alarm(const String& timestamp, int count) {
   }
 
   const bool battery = is_battery_powered();
+  const bool sd_connected = sd_storage_connected();
   String payload = "{\"" + g_device_mac + "_online\":true,\"" +
-                   g_device_mac + "_version\":\"" + FIRMWARE_VERSION + "\",\"" +
-                   g_device_mac + "_error\":\"" + timestamp + "\",\"" +
-                   g_device_mac + "_count\":" + String(count) +
-                   ",\"mac_address\":\"" + g_device_mac +
-                   "\",\"power_source\":\"" + (battery ? "battery" : "mains") +
-                   "\",\"power_lost\":" + (battery ? "true" : "false") + "}";
+                   "version\":\"" + FIRMWARE_VERSION + "\"," +
+                   "\"error\":\"" + timestamp + "\"," +
+                   "\"count\":" + String(count) +
+                   ",\"power_source\":\"" + (battery ? "battery" : "mains") +
+                   "\",\"power_lost\":" + (battery ? "true" : "false") +
+                   ",\"sd_connected\":" + (sd_connected ? "true" : "false") + "}";
 
   Serial.print(F("[MQTT] >> Publishing alarm: "));
   Serial.println(payload);
@@ -363,9 +367,8 @@ bool publish_alarm(const String& timestamp, int count) {
 bool publish_power_state(bool battery_powered) {
   if (!mqtt.connected()) return false;
 
-  String payload = F("{\"msg_type\":\"power_status\",\"mac_address\":\"");
-  payload += g_device_mac;
-  payload += F("\",\"firmware_version\":\"");
+  const bool sd_connected = sd_storage_connected();
+  String payload = F("{\"msg_type\":\"power_status\",\"version\":\"");
   payload += FIRMWARE_VERSION;
   payload += F("\",\"power_source\":\"");
   payload += battery_powered ? F("battery") : F("mains");
@@ -373,7 +376,9 @@ bool publish_power_state(bool battery_powered) {
   payload += battery_powered ? F("true") : F("false");
   payload += F(",\"event_time\":\"");
   payload += get_time_string_ms();
-  payload += F("\"}");
+  payload += F("\",\"sd_connected\":");
+  payload += sd_connected ? F("true") : F("false");
+  payload += F("}");
 
   Serial.print(F("[MQTT] >> Publishing power state: "));
   Serial.println(payload);

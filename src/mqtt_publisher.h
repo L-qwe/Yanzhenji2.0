@@ -5,8 +5,8 @@
  *
  * Topic: self_device/yanzhenji/<mac> (收发共用)
  *
- * 无报警: {"<mac>_online":true,"<mac>_error":"NO"}
- * 报警中: {"<mac>_online":true,"<mac>_error":"<timestamp>"}
+ * 无报警: {"<mac>_online":true,"version":"v2.0.0",...}
+ * 报警中: {"<mac>_online":true,"error":"<timestamp>",...}
  *         报警期间心跳暂停, 报警清除后恢复
  *
  * 订阅指令: {"cmd":"ota","url":"http://server/firmware.bin"}
@@ -45,13 +45,13 @@ bool mqtt_connect();
 // 维护 MQTT 连接 (loop 中调用, 非阻塞)
 void maintain_mqtt();
 
-// 发布告警: {"<mac>_online":true,"<mac>_error":"<timestamp>"} → g_topic_sub
+// 发布告警: {"<mac>_online":true,"error":"<timestamp>"} → g_topic_pub
 bool publish_alarm(const String& timestamp, int count = 1);
 
 // 发布市电/电池状态变化事件。
 bool publish_power_state(bool battery_powered);
 
-// 发布心跳: {"<mac>_online":true,"<mac>_error":"NO"}, 报警期间跳过
+// 发布心跳: {"<mac>_online":true,"version":"v2.0.0",...}, 报警期间跳过
 void publish_heartbeat();
 
 // 订阅设备控制主题

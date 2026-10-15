@@ -13,7 +13,7 @@
  *   config.h / config.cpp            — 全局配置常量
  *   wifi_manager.h / wifi_manager.cpp    — WiFi 连接管理
  *   ntp_time.h / ntp_time.cpp           — NTP 时间同步
- *   sd_storage.h / sd_storage.cpp         — SD 卡永久存储
+ *   sd_storage.h / sd_storage.cpp         — SD 永久存储 + Flash 临时缓存
  *   power_monitor.h / power_monitor.cpp   — 市电/电池状态监控
  *   mqtt_publisher.h / mqtt_publisher.cpp — MQTT 发布/订阅/心跳
  *   alarm_processor.h / alarm_processor.cpp — 报警信号处理
@@ -76,7 +76,7 @@ void setup() {
   // --- 市电/电池状态输入 ---
   power_monitor_init();
 
-  // --- SD 卡（无卡时继续运行，插卡后自动挂载） ---
+  // --- SD 卡与 Flash 暂存（无卡时写 Flash，插卡后自动迁移到 SD） ---
   init_sd_storage();
 
   // --- WiFi ---
@@ -121,7 +121,7 @@ void loop() {
 
   // 2. 报警信号采集与状态机
   process_alarm_signal();
-  process_alarm_group();   // 分组窗口过期检查 (无新触发 >2.5s 则关闭分组)
+  process_alarm_group();   // 首脉冲起 2 秒到期时关闭未满 3 次的报警组
 
   // 3. 断网续传 (每次 loop 最多处理 1 条)
   process_retransmit();

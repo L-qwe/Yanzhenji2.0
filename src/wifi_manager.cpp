@@ -12,6 +12,7 @@
 #include "config.h"
 #include "mqtt_publisher.h"
 #include "ntp_time.h"
+#include "power_monitor.h"
 #include "sd_storage.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -45,6 +46,10 @@ enum {
   K_DASH_ALARM, K_DASH_VIEW, K_DASH_REFRESH, K_DASH_NTP_WARN, K_DASH_TOTAL,
   K_STATIC_IP, K_STATIC_HINT, K_IP_ADDR, K_GATEWAY, K_SUBNET, K_DNS,
   K_DASH_FILTER, K_DASH_DATE, K_DASH_FROM, K_DASH_TO, K_DASH_FILTER_BTN, K_DASH_CLEAR,
+  K_DASH_SELECT_ALL, K_DASH_DELETE_SELECTED, K_DASH_DELETE_CONFIRM,
+  K_DASH_DELETE_OK, K_DASH_DELETE_FAIL,
+  K_DEVICE_STATUS, K_POWER_SOURCE, K_MAINS_POWER, K_BATTERY_POWER,
+  K_SD_CARD, K_SD_READY, K_SD_MISSING,
   K_MANUAL_ADD, K_OR,
 };
 
@@ -78,6 +83,8 @@ static const char* ZH[] = {
   "报警", "查看报警记录", "(每30秒自动刷新)", "⚠ NTP未同步，时间可能不准确", "共",
   "静态IP设置", "留空则使用DHCP自动获取IP", "IP 地址", "网关", "子网掩码", "DNS 服务器",
   "时间筛选", "日期", "从", "至", "筛选", "清除",
+  "全选", "删除选中", "确定删除选中的报警记录？", "报警记录已删除", "删除失败或未选择记录",
+  "设备状态", "供电状态", "外部电源供电", "电池供电", "SD 卡", "已插入并可用", "未插入或不可用",
   "手动添加网络", "或",
 };
 
@@ -112,6 +119,8 @@ static const char* EN[] = {
   "Alarm", "View Alarm Records", "(Auto-refresh every 30s)", "⚠ NTP not synced, times may be inaccurate", "Total",
   "Static IP", "Leave empty to use DHCP", "IP Address", "Gateway", "Subnet Mask", "DNS Server",
   "Time Filter", "Date", "From", "To", "Filter", "Clear",
+  "Select all", "Delete selected", "Delete the selected alarm records?", "Alarm records deleted", "Delete failed or no records selected",
+  "Device Status", "Power Source", "External power", "Battery power", "SD Card", "Inserted and ready", "Not inserted or unavailable",
   "Add Network Manually", "or",
 };
 
@@ -146,6 +155,8 @@ static const char* VI[] = {
   "Bao dong", "Xem Bao Dong", "(Tu dong lam moi moi 30 giay)", "⚠ NTP chua dong bo, thoi gian co the khong chinh xac", "Tong",
   "IP Tinh", "De trong de dung DHCP", "Dia chi IP", "Gateway", "Subnet Mask", "May chu DNS",
   "Loc thoi gian", "Ngay", "Tu", "Den", "Loc", "Xoa",
+  "Chon tat ca", "Xoa muc da chon", "Xoa cac ban ghi bao dong da chon?", "Da xoa ban ghi bao dong", "Xoa that bai hoac chua chon ban ghi",
+  "Trang thai thiet bi", "Nguon dien", "Nguon dien ngoai", "Nguon pin", "The SD", "Da lap va san sang", "Chua lap hoac khong kha dung",
   "Them mang thu cong", "hoac",
 };
 
@@ -180,6 +191,8 @@ static const char* ID[] = {
   "Alarm", "Lihat Rekaman Alarm", "(Refresh otomatis setiap 30 detik)", "⚠ NTP belum sinkron, waktu mungkin tidak akurat", "Total",
   "IP Statis", "Kosongkan untuk DHCP", "Alamat IP", "Gateway", "Subnet Mask", "Server DNS",
   "Filter Waktu", "Tanggal", "Dari", "Ke", "Filter", "Hapus",
+  "Pilih semua", "Hapus pilihan", "Hapus rekaman alarm yang dipilih?", "Rekaman alarm dihapus", "Gagal menghapus atau tidak ada pilihan",
+  "Status Perangkat", "Sumber Daya", "Daya eksternal", "Daya baterai", "Kartu SD", "Terpasang dan siap", "Tidak terpasang atau tidak tersedia",
   "Tambah Jaringan Manual", "atau",
 };
 
@@ -284,6 +297,7 @@ static void handle_factory_reset();
 static void handle_ota_web();
 static void handle_ota_web_go();
 static void handle_dashboard();
+static void handle_history_delete();
 static String url_encode(const String& str);
 
 // ============================================================================
@@ -317,6 +331,21 @@ static void handle_root() {
   // ★ 报警记录面板入口
   html += F("<button class='btn btn-blue' onclick='location=\"/dashboard\"' style='margin-bottom:8px'>📋 ");
   html += T(K_DASH_VIEW); html += F("</button>");
+
+  // 当前供电与 SD 状态，紧邻并位于 WiFi 状态卡片上方。
+  const bool battery_powered = is_battery_powered();
+  const bool sd_connected = sd_storage_connected();
+  html += F("<div class='card'><h3>⚡ "); html += T(K_DEVICE_STATUS); html += F("</h3>");
+  html += F("<div class='status' style='margin-top:10px'><span class='dot ");
+  html += battery_powered ? F("dot-no") : F("dot-ok");
+  html += F("'></span><b>"); html += T(K_POWER_SOURCE); html += F(": </b><span>");
+  html += battery_powered ? T(K_BATTERY_POWER) : T(K_MAINS_POWER);
+  html += F("</span></div>");
+  html += F("<div class='status' style='margin-top:10px'><span class='dot ");
+  html += sd_connected ? F("dot-ok") : F("dot-no");
+  html += F("'></span><b>"); html += T(K_SD_CARD); html += F(": </b><span>");
+  html += sd_connected ? T(K_SD_READY) : T(K_SD_MISSING);
+  html += F("</span></div></div>");
 
   html += F("<div class='card'><div class='status'>");
   if (WiFi.status() == WL_CONNECTED) {
@@ -578,6 +607,7 @@ void connect_wifi() {
   web.on("/factory_reset",handle_factory_reset);
   web.on("/ota_web",handle_ota_web); web.on("/ota_web_go",handle_ota_web_go);
   web.on("/dashboard",handle_dashboard);
+  web.on("/history_delete", HTTP_POST, handle_history_delete);
   web.on("/setlang",handle_setlang); web.onNotFound(handle_root);
   web.begin();
   Serial.println(F("[WiFi] Captive portal ready at http://192.168.4.1/"));
@@ -873,6 +903,33 @@ static String dashboard_page_url(int page, const String& date,
   return url;
 }
 
+// 删除报警历史中勾选的物理行，并返回原来的分页/筛选视图。
+static void handle_history_delete() {
+  std::vector<size_t> selected_lines;
+  for (int i = 0; i < web.args(); i++) {
+    String name = web.argName(i);
+    if (!name.startsWith("record_")) continue;
+
+    String index_text = name.substring(7);
+    bool valid = index_text.length() > 0 && index_text.length() <= 10;
+    for (size_t c = 0; valid && c < index_text.length(); c++) {
+      if (!isDigit(index_text.charAt(c))) valid = false;
+    }
+    if (valid) selected_lines.push_back(strtoul(index_text.c_str(), nullptr, 10));
+  }
+
+  const bool deleted = !selected_lines.empty() &&
+                       remove_storage_lines(HISTORY_FILE, selected_lines);
+
+  int page = web.arg("page").toInt();
+  if (page < 1) page = 1;
+  String location = dashboard_page_url(page, web.arg("date"),
+                                       web.arg("from"), web.arg("to"));
+  location += deleted ? F("&delete=ok") : F("&delete=fail");
+  web.sendHeader("Location", location, true);
+  web.send(303, "text/plain", "");
+}
+
 // ============================================================================
 //  报警记录面板 — 近一周告警 + 版本/MAC
 // ============================================================================
@@ -931,6 +988,15 @@ static void handle_dashboard() {
   // --- 面板标题 + 筛选表单 ---
   html += F("<div class='card'><h3>📋 "); html += T(K_DASH_TITLE); html += F("</h3>");
 
+  String delete_result = web.arg("delete");
+  if (delete_result == "ok") {
+    html += F("<p style='background:#f6ffed;border:1px solid #b7eb8f;color:#389e0d;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:13px'>✓ ");
+    html += T(K_DASH_DELETE_OK); html += F("</p>");
+  } else if (delete_result == "fail") {
+    html += F("<p style='background:#fff2f0;border:1px solid #ffccc7;color:#cf1322;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:13px'>⚠ ");
+    html += T(K_DASH_DELETE_FAIL); html += F("</p>");
+  }
+
   // 筛选表单
   html += F("<form action='/dashboard' method='get' style='margin:8px 0'>");
   html += F("<div style='display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end'>");
@@ -987,9 +1053,12 @@ static void handle_dashboard() {
 
       std::vector<String> dash_ts;
       std::vector<int>    dash_counts;
+      std::vector<size_t> dash_line_indices;
+      size_t physical_line = 0;
 
       while (f.available()) {
         String line = f.readStringUntil('\n');
+        const size_t line_index = physical_line++;
         line.trim();
         if (line.length() == 0) continue;
 
@@ -1018,6 +1087,7 @@ static void handle_dashboard() {
 
         dash_ts.push_back(ts);
         dash_counts.push_back(count);
+        dash_line_indices.push_back(line_index);
       }
       f.close();
       int count = (int)dash_ts.size();
@@ -1050,8 +1120,17 @@ static void handle_dashboard() {
           html += F("</b> "); html += T(K_DASHBOARD); html += F("</p>");
         }
 
+        html += F("<form action='/history_delete' method='post' onsubmit=\"return confirm('");
+        html += T(K_DASH_DELETE_CONFIRM); html += F("')\">");
+        html += F("<input type='hidden' name='page' value='"); html += String(current_page); html += F("'>");
+        html += F("<input type='hidden' name='date' value='"); html += (has_filter ? f_date : String()); html += F("'>");
+        html += F("<input type='hidden' name='from' value='"); html += f_from; html += F("'>");
+        html += F("<input type='hidden' name='to' value='"); html += f_to; html += F("'>");
         html += F("<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:13px'>");
         html += F("<thead><tr style='background:#f6f8fa'>");
+        html += F("<th style='padding:10px 8px;text-align:center;border-bottom:2px solid #e0e0e0;width:86px'>");
+        html += F("<label style='display:flex;align-items:center;justify-content:center;gap:4px;margin:0;font-size:11px;white-space:nowrap'><input type='checkbox' onchange=\"var c=document.getElementsByClassName('history-select');for(var i=0;i<c.length;i++)c[i].checked=this.checked\"><span>");
+        html += T(K_DASH_SELECT_ALL); html += F("</span></label></th>");
         html += F("<th style='padding:10px 8px;text-align:left;border-bottom:2px solid #e0e0e0;width:40px'>#</th>");
         html += F("<th style='padding:10px 8px;text-align:left;border-bottom:2px solid #e0e0e0'>"); html += T(K_DASH_TIME); html += F("</th>");
         html += F("<th style='padding:10px 8px;text-align:center;border-bottom:2px solid #e0e0e0;width:80px'>"); html += T(K_DASH_STATUS); html += F("</th>");
@@ -1065,6 +1144,8 @@ static void handle_dashboard() {
           int i = count - 1 - row;
           const char* bg = ((row - page_first) % 2 == 0) ? "#fff" : "#fafbfc";
           html += F("<tr style='background:"); html += bg; html += F(";border-bottom:1px solid #f0f0f0'>");
+          html += F("<td style='padding:8px;text-align:center'><input class='history-select' type='checkbox' name='record_");
+          html += String(static_cast<unsigned int>(dash_line_indices[i])); html += F("' value='1'></td>");
           html += F("<td style='padding:8px;color:#999;font-size:11px'>"); html += String(row + 1); html += F("</td>");
           html += F("<td style='padding:8px;font-family:SF Mono,Consolas,monospace;font-size:12px'>");
           html += dash_ts[i]; html += F("</td>");
@@ -1078,6 +1159,8 @@ static void handle_dashboard() {
           html += F("</span></td></tr>");
         }
         html += F("</tbody></table></div>");
+        html += F("<button type='submit' class='btn btn-red' style='margin-top:10px'>🗑 ");
+        html += T(K_DASH_DELETE_SELECTED); html += F("</button></form>");
 
         // --- 分页导航 ---
         html += F("<div style='display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px'>");

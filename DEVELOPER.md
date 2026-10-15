@@ -1,7 +1,7 @@
 # 验针机报警监控系统 — 开发者参考手册
 
-> **2.0 说明：** 本文件主体保留 1.x 模块细节供迁移参考。2.0 已将 SPIFFS
-> 报警存储替换为 `sd_storage`，取消定时清理，并新增 `power_monitor`。硬件引脚、
+> **2.0 说明：** 本文件主体保留 1.x 模块细节供迁移参考。2.0 以 `sd_storage`
+> 管理 SD 长期存储，并在 SD 不可用时使用 SPIFFS 暂存、插卡后自动迁移；同时取消定时清理并新增 `power_monitor`。硬件引脚、
 > SD 故障恢复和 MQTT 供电字段以 [V2_ARCHITECTURE.md](V2_ARCHITECTURE.md) 与
 > [README.md](README.md) 为准。
 
@@ -366,6 +366,8 @@ MQTT、NTP、AP 配置从编译时常量改为**运行时 String 变量**。默�
 | `GET /disconnect` | `handle_disconnect()` | 断开 WiFi，清除凭证 |
 | `GET /mqtt` | `handle_mqtt()` | 系统配置表单（MQTT + AP + NTP） |
 | `GET /mqtt_save` | `handle_mqtt_save()` | 保存配置 → ESP.restart() |
+| `GET /dashboard` | `handle_dashboard()` | 报警历史、筛选、分页及勾选删除界面 |
+| `POST /history_delete` | `handle_history_delete()` | 按物理行号批量删除选中的历史记录 |
 | 其他所有 | `handle_root()` | 强制门户回退到首页 |
 
 ---
@@ -528,15 +530,15 @@ g_cfg_mqtt_client_id + "_" + g_device_mac (去冒号)
 
 ---
 
-##### `bool publish_alarm(const String& timestamp)`
+##### `bool publish_alarm(const String& timestamp, int count)`
 
 **功能：** 发布报警到 `g_topic_pub`。
 
-**参数：** `timestamp` — 报警时间戳
+**参数：** `timestamp` — 报警时间戳；`count` — 本组报警次数
 
 **返回值：** `true` 成功 / `false` 失败
 
-**Payload：** `{"<mac>_online":true,"<mac>_error":"<timestamp>"}`
+**Payload：** `{"<mac>_online":true,"version":"v2.0.0","error":"<timestamp>","count":1,"sd_connected":true,...}`
 
 ---
 
@@ -546,7 +548,7 @@ g_cfg_mqtt_client_id + "_" + g_device_mac (去冒号)
 
 **参数：** 无 | **返回值：** 无 | **阻塞：** 非阻塞
 
-**Payload：** `{"<mac>_online":true}`
+**Payload：** `{"<mac>_online":true,"version":"v2.0.0","ip":"...","sd_connected":true,...}`
 
 ---
 
@@ -590,7 +592,10 @@ g_cfg_mqtt_client_id + "_" + g_device_mac (去冒号)
     └─ 计时未满但信号恢复 → Glitch, 丢弃
 
 阶段2: 下降沿 (HIGH → LOW)
-  └─ trigger_alarm(millis())
+  ├─ 首次下降沿开始报警组
+  ├─ 首次下降沿起 2 秒内继续累计
+  ├─ 累计到 3 个脉冲立即 emit_grouped_alarm()
+  └─ 未满 3 次时，2 秒到期也执行 emit_grouped_alarm()
 
 阶段3: 上升沿 (LOW → HIGH)
   └─ 串口日志: ALARM CLEARED
@@ -600,13 +605,13 @@ g_cfg_mqtt_client_id + "_" + g_device_mac (去冒号)
 
 ---
 
-##### `static void trigger_alarm(unsigned long alarm_millis)`
+##### `static void emit_grouped_alarm(unsigned long first_millis, int count)`
 
-**功能：** 生成时间戳 → 在线发布 / 离线存 SPIFFS。
+**功能：** 生成时间戳，写入 SD/Flash 历史，并发布 MQTT；发布失败时加入补传队列。
 
-**参数：** `alarm_millis` — 下降沿发生时的 `millis()` 值
+**参数：** `first_millis` — 本组首次下降沿的 `millis()`；`count` — 组内次数（1～3）
 
-**SPIFFS 记录格式：** `<millis值>|<NTP时间戳>`
+**记录格式：** `<millis值>|<NTP时间戳>|<count>`
 
 ---
 

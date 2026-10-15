@@ -27,13 +27,14 @@ ESP32-WROOM-32 为核心，实时监控验针机（金属检测机）的报警�
 | 功能 | 说明 | 默认值 |
 |------|------|--------|
 | 报警检测 | 下降沿触发（HIGH→LOW），20ms 软件消抖 | 引脚 GPIO34 |
+| 报警分组 | 首脉冲起 2 秒或累计 3 个脉冲，任一条件先满足即记为一笔 | `count=1..3` |
 | 实时上报 | 报警事件立即通过 MQTT 推送 | 毫秒级时间戳 |
-| 永久历史 | 每次报警追加到 SD 卡，不再定时清理 | `/history.txt` |
-| 断网续传 | WiFi 断开期间报警存 SD 卡，恢复后 FIFO 补传 | `/records.txt` |
+| 永久历史 | 优先写 SD；无卡时暂存 Flash，插卡后自动迁移 | `/history.txt` |
+| 断网续传 | 未上报记录写 SD/Flash 队列，恢复后 FIFO 补传 | `/records.txt` |
 | 掉电监控 | BQ24074 PGOOD# 检测市电掉电/恢复并通过 MQTT 上报 | GPIO35 |
 | 心跳监控 | 每秒发送在线状态，报警期间自动暂停 | 可配 200-60000ms |
 | 版本上报 | 心跳和报警均携带固件版本号 | `FIRMWARE_VERSION` 编译时设定 |
-| 设备信息接口 | HTTP/设备 AP/BLE 读取 MAC、固件及 WiFi 状态 | 详见 `DEVICE_INFO_API.md` |
+| 设备信息接口 | HTTP/AP/BLE 读取 MAC、固件、WiFi、供电及 SD 状态 | 详见 `DEVICE_INFO_API.md` |
 | NTP 对时 | 自动同步网络时间，断网期间系统时钟继续走 | 时区可配 |
 | WiFi 配网 | 手机连设备热点 → 网页配置 | 热点名可自定义 |
 | 系统配置 | 同一网页配置 MQTT/AP/NTP/心跳/时区 | 全部存入 NVS |
@@ -46,7 +47,7 @@ ESP32-WROOM-32 为核心，实时监控验针机（金属检测机）的报警�
 ```
 ESP32 上电
   ├─ 加载 NVS 配置 (WiFi/MQTT/NTP/AP/语言)
-  ├─ 挂载 SD 卡并检查历史/补传文件
+  ├─ 挂载 Flash 与 SD，检查待迁移的历史/补传文件
   ├─ 读取 GPIO35 当前供电来源
   ├─ 启动热点 + 连接 WiFi
   ├─ NTP 时间同步
@@ -54,7 +55,7 @@ ESP32 上电
   └─ 进入主循环:
        ├─ 检测 GPIO34 报警信号
        ├─ 检测 GPIO35 市电/电池状态
-       ├─ 检测 SD 卡热插拔
+       ├─ 检测 SD 卡热插拔并迁移 Flash 暂存记录
        ├─ 发布心跳 (每秒)
        ├─ 监听 MQTT OTA 指令
        ├─ 断网补传检查
@@ -77,8 +78,8 @@ ESP32 上电
 | Micro SD MISO | 19 | H2-8，经 U6 连接 Micro SD `DAT0` |
 | Micro SD MOSI | 23 | H2-2，经 U6 连接 Micro SD `CMD` |
 
-Micro SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上报，但无法保存永久历史或
-离线补传记录；运行中插卡会自动挂载。
+Micro SD 卡使用 FAT/FAT32。设备未插卡时，报警历史及尚未上报的记录会暂存在内部
+Flash/SPIFFS；运行中插卡并成功挂载后，固件会自动把暂存记录追加到 SD 卡。
 
 ```
           ESP32-WROOM-32               验针机
@@ -133,7 +134,7 @@ Micro SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上�
 - [ ] 串口（115200 波特率）观察启动日志
 - [ ] 看到 `MQTT Connected!` `Subscribe OK` `Initialization complete`
 - [ ] 在 MQTTX 订阅 `self_device/yanzhenji/设备MAC`，应收到 `_online:true` 心跳
-- [ ] 触发验针机报警（金属测试卡过机），MQTTX 应收到 `_error` 报警消息
+- [ ] 触发验针机报警（金属测试卡过机），MQTTX 应收到 `error` 报警消息
 
 ### 场景 B：更换 WiFi
 
@@ -172,6 +173,7 @@ Micro SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上�
 | 语言选择器 | 顶部下拉：中文 / English / Tiếng Việt / Bahasa Indonesia |
 | 设备 MAC 卡片 | 显示 WiFi MAC 地址（与 MQTT topic 中的 MAC 一致） |
 | 固件版本 | 当前运行的固件版本号 |
+| 设备状态卡片 | 位于 WiFi 上方，显示外部电源/电池供电及 SD 是否接入可用 |
 | WiFi 状态 | 已连接（绿点+SSID+IP）/ 未连接（红点） |
 | 断开 WiFi 按钮 | 仅已连接时出现，断开并清除保存的密码 |
 | MQTT Broker 卡片 | 显示 Broker地址:端口 / Client / 用户 / 发布Topic / 订阅Topic |
@@ -233,6 +235,13 @@ Micro SD 卡使用 FAT/FAT32。设备未插卡时仍可采集和在线 MQTT 上�
 
 清除全部 NVS 配置（WiFi/MQTT/NTP/AP/语言），恢复到编译时的默认值。操作后自动重启。
 
+### 4.4 报警记录页（`/dashboard`）
+
+- 每页显示 25 笔，最新记录在前，可按日期和时间筛选。
+- 每行可独立勾选；表头“全选”会选中当前页全部记录。
+- 点击“删除选中”并确认后，从 SD `/history.txt` 删除对应历史记录。
+- 删除只影响 Web 历史，不会取消 `/records.txt` 中尚待 MQTT 补传的记录。
+
 ---
 
 ## 5. MQTT 通信协议
@@ -260,7 +269,13 @@ self_device/yanzhenji/20:50:0D:E5:55:84
 ```json
 {
   "20:50:0D:E5:55:84_online": true,
-  "20:50:0D:E5:55:84_version": "v2.0.0"
+  "version": "v2.0.0",
+  "ip": "192.168.1.214",
+  "gw": "192.168.1.1",
+  "dhcp": true,
+  "power_source": "mains",
+  "power_lost": false,
+  "sd_connected": true
 }
 ```
 
@@ -269,15 +284,21 @@ self_device/yanzhenji/20:50:0D:E5:55:84
 ```json
 {
   "20:50:0D:E5:55:84_online": true,
-  "20:50:0D:E5:55:84_version": "v2.0.0",
-  "20:50:0D:E5:55:84_error": "2026-07-31 14:23:41.157"
+  "version": "v2.0.0",
+  "error": "2026-07-31 14:23:41.157",
+  "count": 1,
+  "power_source": "mains",
+  "power_lost": false,
+  "sd_connected": true
 }
 ```
+
+除 `<MAC>_online` 外，其他字段均不带 MAC 前缀。`sd_connected=true` 表示 SD 卡已插入且成功挂载可用。
 
 所有启动、心跳和报警消息还会携带当前供电字段：
 
 ```json
-{"mac_address":"20:50:0D:E5:55:84","power_source":"battery","power_lost":true}
+{"power_source":"battery","power_lost":true,"sd_connected":true}
 ```
 
 #### 供电状态变化
@@ -287,11 +308,11 @@ self_device/yanzhenji/20:50:0D:E5:55:84
 ```json
 {
   "msg_type": "power_status",
-  "mac_address": "20:50:0D:E5:55:84",
-  "firmware_version": "v2.0.0",
+  "version": "v2.0.0",
   "power_source": "battery",
   "power_lost": true,
-  "event_time": "2026-09-18 10:30:15.123"
+  "event_time": "2026-09-18 10:30:15.123",
+  "sd_connected": true
 }
 ```
 
@@ -319,8 +340,8 @@ MQTT 重连后设备会再次发送当前供电状态。
 ### 5.4 监控端判断逻辑
 
 ```
-收到消息中有 "_error" 字段 → 设备正在报警
-收到消息中无 "_error" 字段 → 设备正常在线
+收到消息中有 "error" 字段  → 设备正在报警
+收到消息中无 "error" 字段  → 设备正常在线
 超过 3 秒未收到任何消息   → 设备离线
 ```
 
@@ -447,7 +468,8 @@ ESP32 自动下载、MD5 校验、大小校验、刷写、重启。
 | `Event at: 2026-07-31 14:23:41.157` | 报警时间戳 | INFO |
 | `Publishing alarm: {...}` | 发布报警消息 | INFO |
 | `Publish OK` | 发布成功 | INFO |
-| `Offline; SD history=saved, retransmit queue=saved` | 断网记录已写入 SD | WARN |
+| `[FLASH] Cached /history.txt until SD is available` | 无卡，报警历史已暂存 Flash | WARN |
+| `[FLASH->SD] Migrated ... record(s) to SD` | Flash 暂存记录已迁移到 SD | INFO |
 | `Found cached records, processing...` | 开始补传 | INFO |
 | `Upload OK, removing from cache` | 补传成功 | INFO |
 | `<< Received: {"cmd":"ota"...}` | 收到 MQTT OTA 指令 | INFO |
@@ -474,7 +496,7 @@ ESP32 自动下载、MD5 校验、大小校验、刷写、重启。
 | MQTT 连接失败 `rc=-2` | Broker 不可达 | 检查 IP 端口 |
 | 网页 `192.168.4.1` 打不开 | 手机未连热点 | 确认 WiFi 连的是设备热点 |
 | MQTT 长 URL 收不到 | Broker 消息大小限制 | 用压缩格式或网页粘贴替代 |
-| 断网后数据没补传 | SD 卡未插入/挂载失败 | 检查 `[SD]` 日志和 FAT/FAT32 格式 |
+| 插卡后数据没迁移 | SD 卡挂载或写入失败 | 检查 `[SD]`、`[FLASH->SD]` 日志和 FAT/FAT32 格式 |
 | SD 卡无法挂载 | 卡未格式化或接触不良 | 重新插卡并格式化为 FAT/FAT32 |
 | 一直显示电池供电 | GPIO35/PGOOD# 异常 | 测量 GPIO35：市电正常应为低电平 |
 | 报警时间显示 1970 | NTP 从未同步 | 确保开机时 NTP 可达 |
@@ -500,8 +522,8 @@ ESP32 自动下载、MD5 校验、大小校验、刷写、重启。
 | **心跳间隔** | 200-60000ms 可配（默认 1000ms） |
 | **MQTT 库** | PubSubClient |
 | **MQTT Buffer** | 4096 字节 |
-| **报警历史** | SD `/history.txt`，只追加、不定时删除，格式 `millis|timestamp|count` |
-| **补传队列** | SD `/records.txt`，MQTT 补传成功后 FIFO 删除 |
+| **报警历史** | 优先写 SD `/history.txt`；无卡时暂存 Flash，插卡后迁移 |
+| **补传队列** | SD/Flash `/records.txt`；迁移后 MQTT 补传成功才 FIFO 删除 |
 | **配置存储** | NVS（WiFi密码 + MQTT + NTP + AP + 语言 + 心跳） |
 | **看门狗** | 任务看门狗 10 秒 |
 | **NTP 服务器** | 两个服务器可选（默认 aliyun + ntsc） |
@@ -510,5 +532,5 @@ ESP32 自动下载、MD5 校验、大小校验、刷写、重启。
 | **OTA Buffer** | 4KB 分块，每块喂狗 |
 | **配网方式** | AP+STA 双模，内置 WebServer + DNS Captive Portal |
 | **多语言** | 中文/English/Tiếng Việt/Bahasa Indonesia |
-| **分区方案** | 双 OTA 1.5MB；Flash SPIFFS 仅兼容预留，2.0 不写报警数据 |
+| **分区方案** | 双 OTA 1.5MB；896KB SPIFFS 用于无 SD 时临时保存报警数据 |
 | **固件编译大小** | 约 1.1 MB |

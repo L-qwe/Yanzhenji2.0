@@ -10,6 +10,8 @@
 
 #include "config.h"
 #include "device_info.h"
+#include "power_monitor.h"
+#include "sd_storage.h"
 
 static const char* wifi_status_name(wl_status_t status) {
   switch (status) {
@@ -59,9 +61,11 @@ String device_ble_name() {
 String build_device_info_json() {
   const wl_status_t status = WiFi.status();
   const bool connected = status == WL_CONNECTED;
+  const bool battery_powered = is_battery_powered();
+  const bool sd_connected = sd_storage_connected();
 
   String json;
-  json.reserve(320);
+  json.reserve(400);
   json += F("{\"mac_address\":\"");
   json += WiFi.macAddress();
   json += F("\",\"firmware_version\":\"");
@@ -80,15 +84,24 @@ String build_device_info_json() {
   json += connected ? F("true") : F("false");
   json += F(",\"wifi_status\":\"");
   json += wifi_status_name(status);
-  json += F("\"}");
+  json += F("\",\"power_source\":\"");
+  json += battery_powered ? F("battery") : F("mains");
+  json += F("\",\"power_lost\":");
+  json += battery_powered ? F("true") : F("false");
+  json += F(",\"sd_connected\":");
+  json += sd_connected ? F("true") : F("false");
+  json += F("}");
   return json;
 }
 
 String build_device_access_report_json() {
   if (WiFi.status() != WL_CONNECTED) return String();
 
+  const bool battery_powered = is_battery_powered();
+  const bool sd_connected = sd_storage_connected();
+
   String json;
-  json.reserve(256);
+  json.reserve(340);
   json += F("{\"mac_address\":\"");
   json += WiFi.macAddress();
   json += F("\",\"firmware_version\":\"");
@@ -99,6 +112,13 @@ String build_device_access_report_json() {
   json += WiFi.localIP().toString();
   json += F("\",\"wifi_port\":");
   json += String(HTTP_SERVER_PORT);
-  json += F(",\"wifi_connected\":true,\"wifi_status\":\"connected\"}");
+  json += F(",\"wifi_connected\":true,\"wifi_status\":\"connected\"");
+  json += F(",\"power_source\":\"");
+  json += battery_powered ? F("battery") : F("mains");
+  json += F("\",\"power_lost\":");
+  json += battery_powered ? F("true") : F("false");
+  json += F(",\"sd_connected\":");
+  json += sd_connected ? F("true") : F("false");
+  json += F("}");
   return json;
 }
